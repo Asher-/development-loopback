@@ -2,8 +2,9 @@
 
 A standalone MCP server that acts as a chat bridge between external UI
 clients (Chrome extensions, web panels, etc.) and a running Claude Code
-session.  External clients connect over TCP (newline-delimited JSON);
-Claude Code polls via MCP tools.
+session.  External clients connect over TCP (newline-delimited JSON,
+port 9100) or WebSocket (JSON text frames, port 9101); Claude Code
+polls via MCP tools.
 
 Usage:
     # As MCP server (stdio transport, for Claude Code):

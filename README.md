@@ -27,12 +27,13 @@ Add to your `.claude.json` (or project `.mcp.json`):
 
 ```
 Chrome extension / web panel / any UI client
+|                        |                       |
+| TCP (port 9100)        | WebSocket (port 9101) |
+| newline-delimited JSON | JSON text frames      |
+    v                               v
+Bridge Server (shared state)
     |
-    |  TCP (newline-delimited JSON)
-    v
-Bridge Server (port 9100)
-    |
-    |  asyncio.Queue connects TCP listener to MCP tools
+    |  asyncio.Queue connects listeners to MCP tools
     v
 Claude Code (MCP client)
     |
@@ -40,14 +41,17 @@ Claude Code (MCP client)
     |  processes message, uses any available tools
     |  calls send_response() to reply
     v
-Bridge Server routes response back to the waiting TCP client
+Bridge Server routes response back to the waiting client
 ```
 
-Claude Code polls `check_messages(timeout_ms=500)` in a tight loop. When a message arrives, it processes the request using its full context and tool access, then calls `send_response()` to deliver the reply back to the TCP client.
+Claude Code polls `check_messages(timeout_ms=500)` in a tight loop. When a message arrives, it processes the request using its full context and tool access, then calls `send_response()` to deliver the reply back to the client. Both TCP and WebSocket transports share the same bridge state -- the MCP tools are transport-agnostic.
 
 ## Wire Protocol
 
-Newline-delimited JSON over TCP (default port 9100).
+Same JSON format over both transports:
+
+- **TCP** (port 9100): Newline-delimited JSON
+- **WebSocket** (port 9101): JSON text frames (one message per frame)
 
 **Client -> Bridge (chat request):**
 
@@ -94,6 +98,26 @@ async def chat(text: str, context: dict | None = None) -> str:
 
 # Usage:
 # result = asyncio.run(chat("What tools are available?"))
+```
+
+## Example: JavaScript Client (WebSocket)
+
+```javascript
+const ws = new WebSocket("ws://127.0.0.1:9101");
+
+ws.onopen = () => {
+  ws.send(JSON.stringify({
+    type: "chat",
+    conversation_id: crypto.randomUUID(),
+    text: "What tools are available?",
+    context: {},
+  }));
+};
+
+ws.onmessage = (event) => {
+  const response = JSON.parse(event.data);
+  console.log(response.text);
+};
 ```
 
 ## MCP Tools
