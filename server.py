@@ -84,6 +84,88 @@ async def send_response(conversation_id: str, text: str) -> dict:
     return {"status": "sent", "conversation_id": conversation_id}
 
 
+async def _handle_tcp_client(
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
+) -> None:
+    """Handle a single TCP client connection.
+
+    Reads newline-delimited JSON messages.  For each "chat" message:
+    1. Creates a response queue for the conversation_id.
+    2. Pushes the message onto the incoming queue.
+    3. Awaits the response from the response queue.
+    4. Sends the response back to the client as newline-delimited JSON.
+    """
+    peer = writer.get_extra_info("peername", ("unknown",))
+    logger.info("TCP client connected: %s", peer)
+
+    try:
+        while True:
+            line = await reader.readline()
+            if not line:
+                break
+
+            line_str = line.decode().strip()
+            if not line_str:
+                continue
+
+            try:
+                data = json.loads(line_str)
+            except json.JSONDecodeError:
+                error = {"type": "error", "error": "Invalid JSON"}
+                writer.write(json.dumps(error).encode() + b"\n")
+                await writer.drain()
+                continue
+
+            if data.get("type") != "chat":
+                error = {"type": "error", "error": f"Unknown type: {data.get('type')}"}
+                writer.write(json.dumps(error).encode() + b"\n")
+                await writer.drain()
+                continue
+
+            conv_id = data.get("conversation_id", "")
+            if not conv_id:
+                error = {"type": "error", "error": "Missing conversation_id"}
+                writer.write(json.dumps(error).encode() + b"\n")
+                await writer.drain()
+                continue
+
+            # Create response queue and enqueue for Claude Code.
+            response_q: asyncio.Queue[str] = asyncio.Queue()
+            _response_queues[conv_id] = response_q
+
+            await _incoming.put({
+                "conversation_id": conv_id,
+                "text": data.get("text", ""),
+                "context": data.get("context", {}),
+            })
+
+            # Wait for Claude Code to respond.
+            try:
+                response_text = await response_q.get()
+            finally:
+                _response_queues.pop(conv_id, None)
+
+            response = {
+                "type": "response",
+                "conversation_id": conv_id,
+                "text": response_text,
+            }
+            writer.write(json.dumps(response).encode() + b"\n")
+            await writer.drain()
+
+    except (ConnectionResetError, BrokenPipeError):
+        logger.info("TCP client disconnected: %s", peer)
+    except Exception:
+        logger.exception("Error handling TCP client %s", peer)
+    finally:
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except Exception:
+            pass
+
+
 def main():
     mcp.run(transport="stdio")
 
