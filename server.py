@@ -13,15 +13,20 @@ Usage:
     development-loopback
 """
 
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
+from typing import Any
 
+import websockets
 from mcp.server.fastmcp import FastMCP
 
 logger = logging.getLogger(__name__)
 
 BRIDGE_PORT = 9100
+WS_PORT = 9101
 
 mcp = FastMCP(
     name="development-loopback",
@@ -177,16 +182,84 @@ async def _start_tcp_listener(port: int = BRIDGE_PORT) -> asyncio.Server:
     return server
 
 
+async def _handle_ws_client(websocket: Any) -> None:
+    """Handle a single WebSocket client connection.
+
+    Same logic as _handle_tcp_client but reads/writes WebSocket frames
+    instead of newline-delimited bytes.
+    """
+    peer = websocket.remote_address
+    logger.info("WebSocket client connected: %s", peer)
+
+    try:
+        async for raw_message in websocket:
+            try:
+                data = json.loads(raw_message)
+            except json.JSONDecodeError:
+                await websocket.send(json.dumps({"type": "error", "error": "Invalid JSON"}))
+                continue
+
+            if data.get("type") != "chat":
+                await websocket.send(json.dumps({"type": "error", "error": f"Unknown type: {data.get('type')}"}))
+                continue
+
+            conv_id = data.get("conversation_id", "")
+            if not conv_id:
+                await websocket.send(json.dumps({"type": "error", "error": "Missing conversation_id"}))
+                continue
+
+            # Create response queue and enqueue for Claude Code.
+            response_q: asyncio.Queue[str] = asyncio.Queue()
+            _response_queues[conv_id] = response_q
+
+            await _incoming.put({
+                "conversation_id": conv_id,
+                "text": data.get("text", ""),
+                "context": data.get("context", {}),
+            })
+
+            # Wait for Claude Code to respond.
+            try:
+                response_text = await response_q.get()
+            finally:
+                _response_queues.pop(conv_id, None)
+
+            await websocket.send(json.dumps({
+                "type": "response",
+                "conversation_id": conv_id,
+                "text": response_text,
+            }))
+
+    except websockets.ConnectionClosed:
+        logger.info("WebSocket client disconnected: %s", peer)
+    except Exception:
+        logger.exception("Error handling WebSocket client %s", peer)
+
+
+async def _start_ws_listener(port: int = WS_PORT) -> Any:
+    """Start the WebSocket listener for browser-based clients."""
+    ws_server = await websockets.serve(
+        _handle_ws_client,
+        "127.0.0.1",
+        port,
+    )
+    logger.info("WebSocket bridge listening on 127.0.0.1:%d", port)
+    return ws_server
+
+
 def main():
     import anyio
 
     async def _run():
         tcp_server = await _start_tcp_listener()
+        ws_server = await _start_ws_listener()
         try:
             await mcp.run_stdio_async()
         finally:
             tcp_server.close()
             await tcp_server.wait_closed()
+            ws_server.close()
+            await ws_server.wait_closed()
 
     anyio.run(_run)
 

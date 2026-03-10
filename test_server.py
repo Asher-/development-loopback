@@ -188,3 +188,50 @@ async def test_end_to_end_flow():
     finally:
         tcp_server.close()
         await tcp_server.wait_closed()
+
+
+# -- WebSocket transport --
+
+import websockets
+
+from server import _start_ws_listener
+
+
+@pytest.mark.asyncio
+async def test_ws_client_roundtrip():
+    """Full roundtrip: WS send -> check_messages -> send_response -> WS receive."""
+    import socket
+
+    # Find a free port.
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+
+    ws_server = await _start_ws_listener(port=port)
+
+    try:
+        async with websockets.connect(f"ws://127.0.0.1:{port}") as ws:
+            # Send a chat message.
+            msg = {"type": "chat", "conversation_id": "ws_1", "text": "hello from ws", "context": {}}
+            await ws.send(json.dumps(msg))
+
+            # Poll for the message via MCP tool.
+            result = await check_messages(timeout_ms=2000)
+            assert result["status"] == "message"
+            assert result["conversation_id"] == "ws_1"
+            assert result["text"] == "hello from ws"
+
+            # Respond via MCP tool.
+            send_result = await send_response("ws_1", "ws response")
+            assert send_result["status"] == "sent"
+
+            # Read response from WebSocket.
+            response_raw = await asyncio.wait_for(ws.recv(), timeout=2.0)
+            response = json.loads(response_raw)
+            assert response["type"] == "response"
+            assert response["conversation_id"] == "ws_1"
+            assert response["text"] == "ws response"
+
+    finally:
+        ws_server.close()
+        await ws_server.wait_closed()
