@@ -1,0 +1,17 @@
+[project]
+name = "development-loopback"
+version = "0.1.0"
+description = "Development chat bridge — routes UI chat through a running Claude Code session"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp[cli]>=1.0.0",
+]
+
+[tool.setuptools]
+py-modules = ["server"]
+
+[project.scripts]
+development-loopback = "server:main"
+
+[tool.pytest.ini_options]
+asyncio_mode = "strict"
