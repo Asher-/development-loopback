@@ -166,8 +166,29 @@ async def _handle_tcp_client(
             pass
 
 
+async def _start_tcp_listener(port: int = BRIDGE_PORT) -> asyncio.Server:
+    """Start the TCP listener for external clients."""
+    server = await asyncio.start_server(
+        _handle_tcp_client,
+        host="127.0.0.1",
+        port=port,
+    )
+    logger.info("TCP bridge listening on 127.0.0.1:%d", port)
+    return server
+
+
 def main():
-    mcp.run(transport="stdio")
+    import anyio
+
+    async def _run():
+        tcp_server = await _start_tcp_listener()
+        try:
+            await mcp.run_stdio_async()
+        finally:
+            tcp_server.close()
+            await tcp_server.wait_closed()
+
+    anyio.run(_run)
 
 
 if __name__ == "__main__":

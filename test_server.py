@@ -119,3 +119,25 @@ async def test_tcp_client_roundtrip():
     assert response["type"] == "response"
     assert response["conversation_id"] == "tcp_1"
     assert response["text"] == "response text"
+
+
+# -- Task 6: TCP listener startup --
+
+from server import _start_tcp_listener
+
+
+@pytest.mark.asyncio
+async def test_tcp_listener_starts_and_accepts():
+    """TCP listener accepts a connection on the configured port."""
+    import socket
+
+    # Find a free port.
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+
+    tcp_server = await _start_tcp_listener(port=port)
+    assert tcp_server is not None
+    assert tcp_server.is_serving()
+    tcp_server.close()
+    await tcp_server.wait_closed()
