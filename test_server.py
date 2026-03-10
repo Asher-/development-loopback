@@ -141,3 +141,50 @@ async def test_tcp_listener_starts_and_accepts():
     assert tcp_server.is_serving()
     tcp_server.close()
     await tcp_server.wait_closed()
+
+
+# -- Task 7: End-to-end integration test --
+
+
+@pytest.mark.asyncio
+async def test_end_to_end_flow():
+    """Full roundtrip: TCP send -> check_messages -> send_response -> TCP receive."""
+    import socket
+
+    # Find a free port and start the listener.
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+
+    tcp_server = await _start_tcp_listener(port=port)
+
+    try:
+        # Connect as a TCP client.
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+
+        # Send a chat message.
+        msg = {"type": "chat", "conversation_id": "e2e_1", "text": "ping", "context": {}}
+        writer.write(json.dumps(msg).encode() + b"\n")
+        await writer.drain()
+
+        # Poll for the message via MCP tool.
+        result = await check_messages(timeout_ms=2000)
+        assert result["status"] == "message"
+        assert result["text"] == "ping"
+
+        # Respond via MCP tool.
+        send_result = await send_response("e2e_1", "pong")
+        assert send_result["status"] == "sent"
+
+        # Read response from TCP.
+        response_line = await asyncio.wait_for(reader.readline(), timeout=2.0)
+        response = json.loads(response_line.decode().strip())
+        assert response["type"] == "response"
+        assert response["text"] == "pong"
+
+        writer.close()
+        await writer.wait_closed()
+
+    finally:
+        tcp_server.close()
+        await tcp_server.wait_closed()
